@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"sync"
+	"time"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/errors"
@@ -169,6 +170,8 @@ func (c *DefaultDialerClient) SendUploadRequest(ctx context.Context, url string,
 
 		c.uploadRawPool.Put(uploadConn)
 	}
-
+	if(c.transportConfig.GetNormalizedUploadDelay() > 0){
+		time.Sleep(c.transportConfig.GetNormalizedUploadDelay())
+	}
 	return nil
 }

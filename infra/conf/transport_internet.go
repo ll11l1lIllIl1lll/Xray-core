@@ -230,7 +230,41 @@ type SplitHTTPConfig struct {
 	Path                 string            `json:"path"`
 	Headers              map[string]string `json:"headers"`
 	MaxConcurrentUploads int32             `json:"maxConcurrentUploads"`
-	MaxUploadSize        int32             `json:"maxUploadSize"`
+	MaxUploadSize        Int32Range        `json:"maxUploadSize"`
+	MinUploadDelay       Int32Range        `json:"minUploadDelay"`
+	Mux                  SplitHTTPMux      `json:"mux"`
+}
+
+type SplitHTTPMux struct {
+	Mode                     string     `json:"mode"`
+	MaxConnectionConcurrency Int32Range `json:"maxConnectionConcurrency"`
+	MaxConnectionLifetime    Int32Range `json:"maxConnectionLifetime"`
+}
+
+func parseRange(input string) (int32, int32, error) {
+	if len(input) == 0 {
+		return 0, 0, nil // Value not set in configuration.
+	}
+	parts := strings.Split(input, "-")
+	var min, max int64
+	var err, err2 error
+	if len(parts) == 2 {
+		min, err = strconv.ParseInt(parts[0], 10, 64)
+		max, err2 = strconv.ParseInt(parts[1], 10, 64)
+	} else {
+		min, err = strconv.ParseInt(parts[0], 10, 64)
+		max = min
+	}
+	if err != nil {
+		return 0, 0, errors.New("Invalid minimum interval: ", err).Base(err)
+	}
+	if err2 != nil {
+		return 0, 0, errors.New("Invalid maximum interval: ", err2).Base(err2)
+	}
+	if min > max {
+		min, max = max, min
+	}
+	return int32(min), int32(max), nil
 }
 
 // Build implements Buildable.
@@ -243,12 +277,43 @@ func (c *SplitHTTPConfig) Build() (proto.Message, error) {
 	} else if c.Host == "" && c.Headers["Host"] != "" {
 		c.Host = c.Headers["Host"]
 	}
+
+	// Multiplexing config
+	muxProtobuf := splithttp.Multiplexing{}
+	switch strings.ToLower(c.Mux.Mode) {
+	case "disabled", "off", "none":
+		muxProtobuf.Mode = splithttp.Multiplexing_DISABLED
+	case "prefer_reuse", "preferreuse", "": // Default: Reuse existing connections before opening new ones
+		muxProtobuf.Mode = splithttp.Multiplexing_PREFRE_EXTISTING
+	case "prefer_new", "prefernew": // Open new connections until max limit, then reuse
+		muxProtobuf.Mode = splithttp.Multiplexing_PREFRE_NEW
+	default:
+		return nil, errors.New("unsupported splithttp multiplexing mode: ", c.Mux.Mode)
+	}
+	muxProtobuf.MaxConnectionConcurrency = &splithttp.RandRangeConfig{
+		From: c.Mux.MaxConnectionConcurrency.From,
+		To:   c.Mux.MaxConnectionConcurrency.To,
+	}
+	muxProtobuf.MaxConnectionLifetime = &splithttp.RandRangeConfig{
+		From: c.Mux.MaxConnectionLifetime.From,
+		To:   c.Mux.MaxConnectionLifetime.To,
+	}
+
+	// build
 	config := &splithttp.Config{
 		Path:                 c.Path,
 		Host:                 c.Host,
 		Header:               c.Headers,
 		MaxConcurrentUploads: c.MaxConcurrentUploads,
-		MaxUploadSize:        c.MaxUploadSize,
+		MaxUploadSize: &splithttp.RandRangeConfig{
+			From: c.MaxUploadSize.From,
+			To:   c.MaxUploadSize.To,
+		},
+		MinUploadDelay: &splithttp.RandRangeConfig{
+			From: c.MinUploadDelay.From,
+			To:   c.MinUploadDelay.To,
+		},
+		Mux: &muxProtobuf,
 	}
 	return config, nil
 }

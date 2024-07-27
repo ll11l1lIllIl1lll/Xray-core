@@ -2,6 +2,7 @@ package conf
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/xtls/xray-core/common/errors"
@@ -16,7 +17,6 @@ func NewStringList(raw []string) *StringList {
 	list := StringList(raw)
 	return &list
 }
-
 func (v StringList) Len() int {
 	return len(v)
 }
@@ -242,3 +242,33 @@ func (v *User) Build() *protocol.User {
 		Level: uint32(v.LevelByte),
 	}
 }
+
+// Int32Range deserializes from "1-2" or 1, so can deserialize from both int and number.
+// Negative integers can be passed as sentinel values, but do not parse as ranges.
+type Int32Range struct {
+	From int32
+	To   int32
+}
+
+func (v *Int32Range) UnmarshalJSON(data []byte) error {
+	var stringrange string
+	var rawint int32
+	if err := json.Unmarshal(data, &stringrange); err == nil {
+		pair := strings.SplitN(stringrange, "-", 2)
+		if len(pair) == 2 {
+			from, err := strconv.Atoi(pair[0])
+			to, err2 := strconv.Atoi(pair[1])
+			if err == nil && err2 == nil {
+				v.From = int32(from)
+				v.To = int32(to)
+				return nil
+			}
+		}
+	} else if err := json.Unmarshal(data, &rawint); err == nil {
+		v.From = rawint
+		v.To = rawint
+		return nil
+	}
+
+	return errors.New("Invalid integer range, expected either string of form \"1-2\" or plain integer.")
+	}

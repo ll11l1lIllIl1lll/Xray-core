@@ -32,7 +32,7 @@ type dialerConf struct {
 }
 
 var (
-	globalDialerMap    map[dialerConf]DialerClient
+	globalDialerMap    map[dialerConf]*MuxManager
 	globalDialerAccess sync.Mutex
 )
 
@@ -48,15 +48,8 @@ func getHTTPClient(ctx context.Context, dest net.Destination, streamSettings *in
 	globalDialerAccess.Lock()
 	defer globalDialerAccess.Unlock()
 
-	if globalDialerMap == nil {
-		globalDialerMap = make(map[dialerConf]DialerClient)
-	}
-
 	if isH3 {
 		dest.Network = net.Network_UDP
-	}
-	if client, found := globalDialerMap[dialerConf{dest, streamSettings}]; found {
-		return client
 	}
 
 	var gotlsConfig *gotls.Config
@@ -138,13 +131,12 @@ func getHTTPClient(ctx context.Context, dest net.Destination, streamSettings *in
 		httpDialContext := func(ctxInner context.Context, network string, addr string) (net.Conn, error) {
 			return dialContext(ctxInner)
 		}
-
+		// chunked transfer download with keepalives is buggy with
+		// http.Client and our custom dial context.
 		downloadTransport = &http.Transport{
-			DialTLSContext:  httpDialContext,
-			DialContext:     httpDialContext,
-			IdleConnTimeout: 90 * time.Second,
-			// chunked transfer download with keepalives is buggy with
-			// http.Client and our custom dial context.
+			DialTLSContext:    httpDialContext,
+			DialContext:       httpDialContext,
+			IdleConnTimeout:   90 * time.Second,
 			DisableKeepAlives: true,
 		}
 		// we use uploadRawPool for that
@@ -165,7 +157,6 @@ func getHTTPClient(ctx context.Context, dest net.Destination, streamSettings *in
 		dialUploadConn: dialContext,
 	}
 
-	globalDialerMap[dialerConf{dest, streamSettings}] = client
 	return client
 }
 
@@ -183,6 +174,7 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 
 	maxConcurrentUploads := transportConfiguration.GetNormalizedMaxConcurrentUploads()
 	maxUploadSize := transportConfiguration.GetNormalizedMaxUploadSize()
+	minUploadInterval := transportConfiguration.GetNormalizedUploadDelay()
 
 	if tlsConfig != nil {
 		requestURL.Scheme = "https"
@@ -195,7 +187,23 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 	}
 	requestURL.Path = transportConfiguration.GetNormalizedPath()
 
-	httpClient := getHTTPClient(ctx, dest, streamSettings)
+	globalDialerAccess.Lock()
+	var muxManager *MuxManager
+	key := dialerConf{dest, streamSettings}
+	if globalDialerMap == nil {
+		globalDialerMap = make(map[dialerConf]*MuxManager)
+	}
+	muxManager, found := globalDialerMap[key]
+	if !found {
+		muxManager = NewMuxManager(transportConfiguration.GetNormalizedMux())
+		globalDialerMap[key] = muxManager
+	}
+	globalDialerAccess.Unlock()
+
+	httpClient, err := muxManager.Dial(ctx, dest, streamSettings)
+	if err != nil {
+		return nil, err
+	}
 
 	sessionIdUuid := uuid.New()
 	sessionId := sessionIdUuid.String()
@@ -206,6 +214,8 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 	go func() {
 		requestsLimiter := semaphore.New(int(maxConcurrentUploads))
 		var requestCounter int64
+
+		lastWrite := time.Now()
 
 		// by offloading the uploads into a buffered pipe, multiple conn.Write
 		// calls get automatically batched together into larger POST requests.
@@ -236,7 +246,13 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 					uploadPipeReader.Interrupt()
 				}
 			}()
-
+			if minUploadInterval > 0 {
+				roll := time.Duration(minUploadInterval)
+				if time.Since(lastWrite) < roll {
+					time.Sleep(roll)
+				}
+				lastWrite = time.Now()
+			}
 		}
 	}()
 
