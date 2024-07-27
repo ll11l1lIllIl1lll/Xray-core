@@ -79,6 +79,19 @@ func (c *Config) GetNormalizedMinUploadInterval() RandRangeConfig {
 	return *r
 }
 
+func (c *Config) GetNormalizedMinUploadInterval() RandRangeConfig {
+	r := c.MinUploadIntervalMs
+
+	if r == nil {
+		r = &RandRangeConfig{
+			From: 30,
+			To:   30,
+		}
+	}
+
+	return *r
+}
+
 func init() {
 	common.Must(internet.RegisterProtocolConfigCreator(protocolName, func() interface{} {
 		return new(Config)
