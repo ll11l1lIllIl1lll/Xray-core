@@ -226,7 +226,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 				writeConn = inbound.Conn
 				inTimer = inbound.Timer
 			}
-			if !isTLSConn(conn) && !isTLSConn(writeConn) { // it would be tls conn in special use case of MITM, we need to let link handle traffic
+			if !isTLSConn(conn) { // it would be tls conn in special use case of MITM, we need to let link handle traffic
 				return proxy.CopyRawConnIfExist(ctx, conn, writeConn, link.Writer, timer, inTimer)
 			}
 		}
