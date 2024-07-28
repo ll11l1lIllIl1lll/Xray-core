@@ -37,6 +37,7 @@ func (m *MuxManager) Dial(ctx context.Context, dest net.Destination, streamSetti
 	if len(m.dialerClients) > 0 {
 		m.RemoveExpiredConnections()
 	}
+	errors.LogDebug(ctx, "SplitHTTP MUX - Mode=", m.config.Mode)
 	switch m.config.Mode {
 	case Multiplexing_PREFRE_EXTISTING:
 		return m.dialPreferExisting(ctx, dest, streamSettings)
